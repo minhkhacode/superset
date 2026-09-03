@@ -422,6 +422,11 @@ supersetCeleryBeat:
 supersetWebsockets:
   enabled: true
   replicaCount: 1
+  # Phải khai báo tường minh service.port (int) — nếu để chart tự default, giá trị mặc định
+  # trong template là literal Go template (float64) khiến GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL
+  # bị render lỗi thành "%!d(float64=8080)" và làm WebSocket connect thất bại ở browser.
+  service:
+    port: 8080
   config:
     port: 8080
     logLevel: "info"
