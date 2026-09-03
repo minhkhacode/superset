@@ -1,0 +1,530 @@
+nameOverride: ~
+fullnameOverride: ~
+
+cluster:
+  domain: ".svc.cluster.local"
+  databaseServiceName: ~
+  redisServiceName: ~
+  websocketServiceName: ~
+
+extraLabels: {}
+globalPodAnnotations: {}
+
+# Không nên chạy container bằng root ở production — đổi sang UID khác (vd 1000) nếu có thể.
+runAsUser: 1000
+
+secretEnv:
+  create: true
+  annotations: {}
+
+serviceAccountName: ~
+serviceAccount:
+  create: false
+  name: ""
+  annotations: {}
+
+# Cài thêm package cần thiết (bớt các driver DB không dùng để build nhanh hơn nếu muốn tối ưu thêm)
+bootstrapScript: |
+  #!/bin/bash
+  uv pip install .[postgres] \
+    .[bigquery] \
+    clickhouse-connect \
+    .[elasticsearch] &&\
+  if [ ! -f ~/bootstrap ]; then echo "Running Superset with uid {{ .Values.runAsUser }}" > ~/bootstrap; fi
+
+configFromSecret: '{{ template "superset.fullname" . }}-config'
+
+secretConfig:
+  annotations: {}
+
+envFromSecret: '{{ template "superset.fullname" . }}-env'
+envFromSecrets: []
+
+extraEnv: {}
+extraEnvRaw: []
+extraSecretEnv: {}
+extraConfigs: {}
+extraSecrets: {}
+extraVolumes: []
+extraVolumeMounts: []
+
+# Override cuối superset_config.py.
+# QUAN TRỌNG: đổi SECRET_KEY này trước khi deploy production!
+# Tạo bằng: openssl rand -base64 42
+configOverrides:
+  secret: |
+    SECRET_KEY = 'CKGhR8hd7VMeAX8Q0dW70hW0YGwm/A7uBq/1UjvNUlpk='
+
+configOverridesFiles: {}
+
+configMountPath: "/app/pythonpath"
+extraConfigMountPath: "/app/configs"
+
+image:
+  repository: apachesuperset.docker.scarf.sh/apache/superset
+  tag: ~
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 8088
+  annotations: {}
+  loadBalancerIP: ~
+  nodePort:
+    http: nil
+
+ingress:
+  enabled: false
+  ingressClassName: ~
+  annotations: {}
+  path: /
+  pathType: ImplementationSpecific
+  hosts:
+    - chart-example.local
+  tls: []
+  extraHostsRaw: []
+
+httproute:
+  enabled: false
+  apiVersion: gateway.networking.k8s.io/v1
+  labels: {}
+  annotations: {}
+  parentRefs: []
+  hostnames: []
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+
+resources: {}
+
+hostAliases: []
+
+database:
+  uri: ~
+  driver: ~
+  host: ~
+  port: ~
+  user: ~
+  password: ~
+  name: ~
+  ssl:
+    enabled: false
+    mode: require
+
+cache:
+  enabled: true
+  cacheUrl: ~
+  celeryUrl: ~
+  host: ~
+  port: ~
+  user: ""
+  password: ~
+  cacheDb: ~
+  celeryDb: ~
+  keyPrefix: "superset_"
+  defaultTimeout: 86400
+  resultsBackendKeyPrefix: "superset_results"
+  asyncQueries:
+    keyPrefix: "qc-"
+    timeout: 86400
+  sentinel: ~
+  ssl:
+    enabled: false
+    ssl_cert_reqs: required
+    certfile: ~
+    keyfile: ~
+    ca_certs: ~
+  driver: ""
+
+# Config Superset (superset/config.py). Thêm các key cần dùng, vd:
+# SECRET_KEY, ROW_LIMIT, DEBUG...
+config: {}
+
+# Feature flags. Xem: https://github.com/apache/superset/blob/master/RESOURCES/FEATURE_FLAGS.md
+featureFlags: {}
+
+supersetNode:
+  replicas:
+    enabled: true
+    replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 100
+    targetCPUUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable: 1
+  command:
+    - "/bin/sh"
+    - "-c"
+    - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; exec /usr/bin/run-server.sh"
+  connections: {}
+  env: {}
+  forceReload: false
+  initContainers:
+    - name: wait-for-postgres
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/bash
+        - -c
+        - |
+          SECONDS=0
+          until (exec 3<>/dev/tcp/"$DB_HOST"/"$DB_PORT") 2>/dev/null; do
+            if [ "$SECONDS" -ge 120 ]; then
+              echo "timeout waiting for postgres at $DB_HOST:$DB_PORT after 120s" >&2
+              exit 1
+            fi
+            echo "waiting for postgres at $DB_HOST:$DB_PORT (elapsed ${SECONDS}s)"
+            sleep 2
+          done
+          echo "postgres at $DB_HOST:$DB_PORT is up"
+      resources:
+        limits:
+          cpu: "250m"
+          memory: "128Mi"
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+  extraInitContainers: []
+  extraContainers: []
+  deploymentAnnotations: {}
+  deploymentLabels: {}
+  deploymentAdditionalPodSpec: {}
+  affinity: {}
+  topologySpreadConstraints: []
+  podAnnotations: {}
+  podLabels: {}
+  startupProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 15
+    timeoutSeconds: 1
+    failureThreshold: 60
+    periodSeconds: 5
+    successThreshold: 1
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 15
+    timeoutSeconds: 1
+    failureThreshold: 3
+    periodSeconds: 15
+    successThreshold: 1
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 15
+    timeoutSeconds: 1
+    failureThreshold: 3
+    periodSeconds: 15
+    successThreshold: 1
+  lifecycle: {}
+  terminationGracePeriodSeconds: ~
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  podSecurityContext: {}
+  containerSecurityContext: {}
+  strategy: {}
+
+supersetWorker:
+  replicas:
+    enabled: true
+    replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 100
+    targetCPUUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable: 1
+  command:
+    - "/bin/sh"
+    - "-c"
+    - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; exec celery --app=superset.tasks.celery_app:app worker"
+  forceReload: false
+  initContainers:
+    - name: wait-for-postgres-redis
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/bash
+        - -c
+        - |
+          SECONDS=0
+          wait_for() {
+            local host=$1 port=$2 name=$3
+            until (exec 3<>/dev/tcp/"$host"/"$port") 2>/dev/null; do
+              if [ "$SECONDS" -ge 120 ]; then
+                echo "timeout waiting for $name at $host:$port after 120s" >&2
+                exit 1
+              fi
+              echo "waiting for $name at $host:$port (elapsed ${SECONDS}s)"
+              sleep 2
+            done
+            echo "$name at $host:$port is up"
+          }
+          wait_for "$DB_HOST" "$DB_PORT" postgres
+          wait_for "$REDIS_HOST" "$REDIS_PORT" redis
+      resources:
+        limits:
+          cpu: "250m"
+          memory: "128Mi"
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+  extraInitContainers: []
+  extraContainers: []
+  deploymentAnnotations: {}
+  deploymentLabels: {}
+  deploymentAdditionalPodSpec: {}
+  affinity: {}
+  topologySpreadConstraints: []
+  podAnnotations: {}
+  podLabels: {}
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "2Gi"
+  podSecurityContext: {}
+  containerSecurityContext: {}
+  strategy: {}
+  livenessProbe:
+    exec:
+      command:
+        - sh
+        - -c
+        - celery -A superset.tasks.celery_app:app inspect ping -d celery@$HOSTNAME
+    initialDelaySeconds: 120
+    timeoutSeconds: 60
+    failureThreshold: 3
+    periodSeconds: 60
+    successThreshold: 1
+  lifecycle: {}
+  terminationGracePeriodSeconds: ~
+  startupProbe: {}
+  readinessProbe: {}
+  healthCheck:
+    enabled: false
+    readinessFile: "/tmp/celery_worker_ready"
+    livenessFile: "/tmp/celery_worker_alive"
+    livenessHeartbeatInterval: 10
+  priorityClassName: ~
+
+# Chỉ cần nếu bạn dùng Alerts & Reports.
+supersetCeleryBeat:
+  enabled: false
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable: 1
+  command:
+    - "/bin/sh"
+    - "-c"
+    - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; exec celery --app=superset.tasks.celery_app:app beat --pidfile /tmp/celerybeat.pid --schedule /tmp/celerybeat-schedule"
+  forceReload: false
+  initContainers:
+    - name: wait-for-postgres-redis
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/bash
+        - -c
+        - |
+          SECONDS=0
+          wait_for() {
+            local host=$1 port=$2 name=$3
+            until (exec 3<>/dev/tcp/"$host"/"$port") 2>/dev/null; do
+              if [ "$SECONDS" -ge 120 ]; then
+                echo "timeout waiting for $name at $host:$port after 120s" >&2
+                exit 1
+              fi
+              echo "waiting for $name at $host:$port (elapsed ${SECONDS}s)"
+              sleep 2
+            done
+            echo "$name at $host:$port is up"
+          }
+          wait_for "$DB_HOST" "$DB_PORT" postgres
+          wait_for "$REDIS_HOST" "$REDIS_PORT" redis
+      resources:
+        limits:
+          cpu: "250m"
+          memory: "128Mi"
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+  extraInitContainers: []
+  extraContainers: []
+  deploymentAnnotations: {}
+  deploymentAdditionalPodSpec: {}
+  affinity: {}
+  topologySpreadConstraints: []
+  podAnnotations: {}
+  podLabels: {}
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "250m"
+      memory: "512Mi"
+  podSecurityContext: {}
+  containerSecurityContext: {}
+  priorityClassName: ~
+
+init:
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  command:
+    - "/bin/sh"
+    - "-c"
+    - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; . {{ .Values.configMountPath }}/superset_init.sh"
+  enabled: true
+  jobAnnotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": "before-hook-creation"
+  additionalPodSpec: {}
+  loadExamples: false
+  createAdmin: true
+  adminUser:
+    username: admin
+    firstname: Superset
+    lastname: Admin
+    email: admin@superset.com
+    # ĐỔI mật khẩu này trước khi deploy production!
+    password: admin
+  initContainers:
+    - name: wait-for-postgres
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/bash
+        - -c
+        - |
+          SECONDS=0
+          until (exec 3<>/dev/tcp/"$DB_HOST"/"$DB_PORT") 2>/dev/null; do
+            if [ "$SECONDS" -ge 120 ]; then
+              echo "timeout waiting for postgres at $DB_HOST:$DB_PORT after 120s" >&2
+              exit 1
+            fi
+            echo "waiting for postgres at $DB_HOST:$DB_PORT (elapsed ${SECONDS}s)"
+            sleep 2
+          done
+          echo "postgres at $DB_HOST:$DB_PORT is up"
+      resources:
+        limits:
+          cpu: "250m"
+          memory: "128Mi"
+        requests:
+          cpu: "50m"
+          memory: "64Mi"
+  extraInitContainers: []
+  extraContainers: []
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext: {}
+  containerSecurityContext: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ~
+  # Fix cho Istio auto sidecar-injection khiến init Job không bao giờ Completed.
+  # Xem: https://github.com/apache/superset/issues/25798
+  istio:
+    disableSidecarInjection: false
+    terminateSidecarOnExit: false
+    quitEndpoint: "http://localhost:15020/quitquitquit"
+
+postgresql:
+  enabled: true
+  auth:
+    existingSecret:
+    username: superset
+    password: superset
+    database: superset
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: "14.17.0-debian-12-r3"
+  primary:
+    persistence:
+      enabled: true
+      accessModes:
+        - ReadWriteOnce
+    service:
+      ports:
+        postgresql: "5432"
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+    existingSecret: ""
+    existingSecretKey: ""
+    password: superset
+  master:
+    persistence:
+      enabled: false
+      accessModes:
+        - ReadWriteOnce
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: 7.0.10-debian-11-r4
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ~
