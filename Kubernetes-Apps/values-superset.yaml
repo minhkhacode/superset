@@ -147,7 +147,10 @@ cache:
 config: {}
 
 # Feature flags. Xem: https://github.com/apache/superset/blob/master/RESOURCES/FEATURE_FLAGS.md
-featureFlags: {}
+# GLOBAL_ASYNC_QUERIES: đẩy query nặng (chart/dashboard) chạy qua Celery worker + đẩy kết quả
+# về browser qua WebSocket (supersetWebsockets bên dưới) thay vì polling.
+featureFlags:
+  GLOBAL_ASYNC_QUERIES: true
 
 supersetNode:
   replicas:
@@ -250,10 +253,13 @@ supersetWorker:
   replicas:
     enabled: true
     replicaCount: 1
+  # Bật autoscaling để tránh nghẽn hàng đợi Celery khi nhiều query nặng chạy song song.
+  # Cần cluster đã có metrics-server để HPA đọc được CPU usage.
+  # min/maxReplicas là giá trị khởi điểm, cần tinh chỉnh theo tải thực tế.
   autoscaling:
-    enabled: false
-    minReplicas: 1
-    maxReplicas: 100
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
     targetCPUUtilizationPercentage: 80
   podDisruptionBudget:
     enabled: false
@@ -401,6 +407,48 @@ supersetCeleryBeat:
   podSecurityContext: {}
   containerSecurityContext: {}
   priorityClassName: ~
+
+# Websocket service cho GLOBAL_ASYNC_QUERIES (feature flag ở trên) — push kết quả query
+# nặng về browser qua WebSocket thay vì polling. Đọc event từ Redis stream do supersetNode ghi vào.
+#
+# LƯU Ý QUAN TRỌNG: GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL được chart tự sinh dựa vào
+# cluster.websocketServiceName (DNS nội bộ cluster: <service>.<namespace>.svc.cluster.local).
+# Browser của user cần kết nối trực tiếp tới URL này — nếu Superset của bạn được truy cập
+# từ bên ngoài cluster (qua ingress/httproute), bạn PHẢI:
+#   1. Bật ingress/httproute (hiện đang enabled: false ở trên) với domain thật, và route
+#      thêm path /ws (hoặc supersetWebsockets.ingress.path) tới service -ws, hoặc
+#   2. Set supersetWebsockets.websocketUrl = "wss://<domain-that-browser-can-reach>/ws"
+# Nếu không, GLOBAL_ASYNC_QUERIES sẽ không hoạt động cho user truy cập từ ngoài cluster.
+supersetWebsockets:
+  enabled: true
+  replicaCount: 1
+  config:
+    port: 8080
+    logLevel: "info"
+    logToFile: false
+    logFilename: "app.log"
+    statsd:
+      host: "127.0.0.1"
+      port: 8125
+      globalTags: []
+    redis:
+      # Trỏ về cùng Redis đang dùng cho cache/celery ở trên (release-redis-headless).
+      host: "{{ .Release.Name }}-redis-headless"
+      port: 6379
+      password: ""
+      db: 0
+      ssl: false
+    redisStreamPrefix: "async-events-"
+    # ĐỔI secret này trước khi deploy production! Tạo bằng: openssl rand -base64 42
+    jwtSecret: "pN/vH7BDTvKc7SsLXyxPCkda74DLzxqYDB/dcgdj0GUvMOvh/nSUs9Th"
+    jwtCookieName: "async-token"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
 
 init:
   resources:
