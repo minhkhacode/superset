@@ -144,7 +144,16 @@ cache:
 
 # Config Superset (superset/config.py). Thêm các key cần dùng, vd:
 # SECRET_KEY, ROW_LIMIT, DEBUG...
-config: {}
+#
+# GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL: bug thật sự của chart 0.22.4 — Helm parse values.yaml
+# qua sigs.k8s.io/yaml (YAML -> JSON -> interface{}) nên MỌI số nguyên trong .Values đều thành
+# float64 khi vào template, kể cả khi mình set supersetWebsockets.service.port: 8080 tường minh.
+# Template chart lại dùng printf "%d" với giá trị đó -> luôn lỗi thành "%!d(float64=8080)"
+# bất kể set gì trong values. Set thẳng chuỗi URL ở đây để bypass hẳn nhánh code bị lỗi
+# (nhánh "if .Values.config.GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL" được ưu tiên trước, không
+# qua printf). Release name = "apache-superset" (tên ArgoCD Application), namespace = "superset".
+config:
+  GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL: "ws://apache-superset-ws.superset.svc.cluster.local:8080/ws"
 
 # Feature flags. Xem: https://github.com/apache/superset/blob/master/RESOURCES/FEATURE_FLAGS.md
 # GLOBAL_ASYNC_QUERIES: đẩy query nặng (chart/dashboard) chạy qua Celery worker + đẩy kết quả
@@ -411,20 +420,18 @@ supersetCeleryBeat:
 # Websocket service cho GLOBAL_ASYNC_QUERIES (feature flag ở trên) — push kết quả query
 # nặng về browser qua WebSocket thay vì polling. Đọc event từ Redis stream do supersetNode ghi vào.
 #
-# LƯU Ý QUAN TRỌNG: GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL được chart tự sinh dựa vào
-# cluster.websocketServiceName (DNS nội bộ cluster: <service>.<namespace>.svc.cluster.local).
-# Browser của user cần kết nối trực tiếp tới URL này — nếu Superset của bạn được truy cập
-# từ bên ngoài cluster (qua ingress/httproute), bạn PHẢI:
+# LƯU Ý QUAN TRỌNG: GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL đang được set thẳng bằng chuỗi ở
+# config.GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL (xem phía trên, gần config: {}) — đây là DNS nội bộ
+# cluster (<service>.<namespace>.svc.cluster.local). Browser của user cần kết nối trực tiếp
+# tới URL này — nếu Superset của bạn được truy cập từ bên ngoài cluster (qua ingress/httproute),
+# bạn PHẢI:
 #   1. Bật ingress/httproute (hiện đang enabled: false ở trên) với domain thật, và route
 #      thêm path /ws (hoặc supersetWebsockets.ingress.path) tới service -ws, hoặc
-#   2. Set supersetWebsockets.websocketUrl = "wss://<domain-that-browser-can-reach>/ws"
+#   2. Đổi config.GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL thành "wss://<domain-browser-reach-được>/ws"
 # Nếu không, GLOBAL_ASYNC_QUERIES sẽ không hoạt động cho user truy cập từ ngoài cluster.
 supersetWebsockets:
   enabled: true
   replicaCount: 1
-  # Phải khai báo tường minh service.port (int) — nếu để chart tự default, giá trị mặc định
-  # trong template là literal Go template (float64) khiến GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL
-  # bị render lỗi thành "%!d(float64=8080)" và làm WebSocket connect thất bại ở browser.
   service:
     port: 8080
   config:
