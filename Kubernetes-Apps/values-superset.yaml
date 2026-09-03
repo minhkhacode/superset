@@ -10,8 +10,10 @@ cluster:
 extraLabels: {}
 globalPodAnnotations: {}
 
-# Không nên chạy container bằng root ở production — đổi sang UID khác (vd 1000) nếu có thể.
-runAsUser: 1000
+# Bootstrap script cần build/cài package vào /app (root:root, 755) nên phải chạy bằng root.
+# Không nên chạy container bằng root ở production — nếu muốn đổi sang UID khác (vd 1000),
+# cần bake sẵn driver DB vào image lúc build thay vì cài lúc runtime.
+runAsUser: 0
 
 secretEnv:
   create: true
