@@ -15,12 +15,12 @@ spec:
       helm:
         valueFiles:
           # Vì file nằm ở gốc Repo nên chỉ cần $my-git-repo/values-superset.yaml
-          - $my-git-repo/values-superset.yaml
+          - $git-repo/Kubernetes-Apps/values-superset.yaml
 
     # Nguồn 2: URL Git thực tế trên GitHub của bạn
-    - repoURL: 'https://github.com/minhkhacode/superset-gitops.git'
+    - repoURL: 'https://github.com/minhkhacode/superset.git'
       targetRevision: main # Nhánh thực tế trong hình của bạn là main
-      ref: my-git-repo
+      ref: git-repo
 
   destination:
     server: 'https://kubernetes.default.svc'
