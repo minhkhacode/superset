@@ -19,7 +19,7 @@ Superset gồm 3 thành phần cốt lõi, cộng thêm Celery worker/beat và (
 
 ### 2. Metadata Database (PostgreSQL)
 
-- Lưu: user/role/permission, database connections, định nghĩa dataset/chart/dashboard, query history, log, lịch alert/report.
+- Lưu: user/role/permission, database connections, định nghĩa datetaset/chart/dashboard, query history, log, lịch alert/report.
 - **Không** lưu dữ liệu phân tích thực — dữ liệu business nằm ở data warehouse riêng mà Superset chỉ kết nối tới qua SQLAlchemy.
 - Trong deployment: subchart `postgresql` (bitnamilegacy/postgresql 14.17), database/user `superset`, có PVC persistence.
 
