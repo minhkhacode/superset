@@ -50,6 +50,32 @@ Trong deployment: subchart `redis` (bitnamilegacy/redis 7.0.10, standalone, `aut
    - **Cache miss, query bất đồng bộ** (SQL Lab async hoặc `GLOBAL_ASYNC_QUERIES`) → `supersetNode` đẩy task vào Celery queue (Redis broker) → `supersetWorker` nhận task, chạy query, ghi kết quả vào Redis (results backend) + ghi event vào Redis Stream → `supersetWebsockets` đọc stream, đẩy kết quả real-time về browser qua WebSocket.
 4. `supersetCeleryBeat` (nếu bật) định kỳ đẩy task snapshot/report (Alerts & Reports) vào Celery queue để `supersetWorker` xử lý và gửi email.
 
+## Cơ chế Celery Worker / Celery Beat chạy task cụ thể như thế nào
+
+### Celery Worker — thực thi task
+
+1. **Đẩy task (producer, phía `supersetNode`)**: khi user tick "Run Async" ở SQL Lab hoặc load chart/dashboard lúc `GLOBAL_ASYNC_QUERIES` bật — `supersetNode` ghi 1 row `Query` vào Metadata DB (status `PENDING`), rồi gọi `task.delay(...)` (Celery API). Hàm này serialize tên task + tham số thành message, `LPUSH` vào Redis dưới dạng 1 **list** đóng vai trò hàng đợi (queue mặc định tên `celery`) — đây là ý nghĩa "Redis = broker". `supersetNode` trả response ngay (query_id), không đợi kết quả.
+2. **Lấy task (consumer, phía `supersetWorker`)**: lệnh chạy là `celery --app=superset.tasks.celery_app:app worker` (xem `values-superset.yaml`). Khi start, worker mở kết nối Redis và liên tục **`BRPOP`** (blocking pop) trên list đó — "ngồi chờ" chứ không polling tốn CPU. Có message tới → tra tên task trong registry (các hàm đăng ký bằng `@celery_app.task`, vd `get_sql_results` cho SQL Lab) → giao cho 1 process con trong pool (Celery mặc định dùng pool *prefork* — nhiều tiến trình OS riêng, số lượng = số CPU container thấy được, vì values file không set `--concurrency` tường minh).
+3. Vì nhiều pod worker (autoscale 2-6) cùng `BRPOP` chung 1 list Redis → mô hình **competing consumers**: `BRPOP` atomic nên không có 2 worker cùng nhận trùng 1 task.
+4. **Bên trong 1 task** (ví dụ SQL Lab async):
+   - Load lại row `Query` từ Metadata DB theo `query_id`.
+   - Gọi `Database.get_sqla_engine()` → build/tái sử dụng SQLAlchemy engine, **mở connection TCP thật** từ chính pod `supersetWorker` tới Data Warehouse (Postgres/ClickHouse).
+   - Chạy SQL, load kết quả vào `pandas.DataFrame`.
+   - Ghi kết quả vào **results backend** — namespace Redis riêng (`resultsBackendKeyPrefix: superset_results`), khác với cache chart thường (`keyPrefix: superset_`).
+   - Update row `Query` trong Metadata DB → status `SUCCESS`/`FAILED`.
+   - Nếu `GLOBAL_ASYNC_QUERIES` bật: `XADD` thêm 1 event vào Redis Stream (`async-events-...`) để `supersetWebsockets` đọc và đẩy real-time về browser.
+
+### Celery Beat — chỉ lên lịch, không tự thực thi
+
+- Lệnh: `celery ... beat --pidfile /tmp/celerybeat.pid --schedule /tmp/celerybeat-schedule` — 2 file local chỉ để Beat nhớ lần chạy gần nhất của từng lịch (tránh chạy trùng khi pod restart).
+- Beat không tự biết "Alert A chạy 8h sáng" — nó chỉ giữ 1 lịch cố định trong code Superset (vd "mỗi 60s bắn 1 task quét report"). Chính task đó (khi chạy — bởi **Worker**, không phải Beat) mới query Metadata DB để xem Alert/Report nào tới giờ (cron field lưu trong DB), rồi mới đẩy tiếp task thực thi thật (chụp ảnh, gửi mail) vào queue.
+- Vì vậy chỉ nên chạy **đúng 1 replica** Beat (không autoscale) — 2 Beat cùng chạy sẽ bắn trùng lịch. Deployment hiện tại `enabled: false` nên không có tiến trình nào giữ lịch.
+
+### Ý nghĩa hạ tầng
+
+- `supersetNode` (producer) và `supersetWorker` (consumer) phải cùng trỏ về 1 Redis (`cache.celeryUrl`) — lệch cấu hình thì task "biến mất" (không lỗi, không log, không ai xử lý).
+- Số worker replica (2-6, autoscale theo CPU) quyết định thông lượng xử lý song song — query nặng dồn dập mà CPU chưa kịp scale, task xếp hàng chờ trong Redis list, browser thấy `PENDING` lâu dù chưa hề mở connection tới data warehouse.
+
 ## Lưu ý riêng cho deployment này
 
 Xem thêm comment chi tiết trong `Kubernetes-Apps/values-superset.yaml`:
