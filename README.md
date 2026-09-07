@@ -1,19 +1,17 @@
-# [Data] Nghiên cứu cài đặt và cấu hình Superset — Kết quả thực hiện
+# [Data] Ticket: SRE-1491 Nghiên cứu cài đặt và cấu hình Superset
 
-Ticket: SRE-1491. Không có hạng mục cài đặt mới trong lần này — công việc là **nghiên cứu** (research) trên hệ thống Superset đã deploy sẵn qua ArgoCD (namespace `superset`, Helm chart `apache/superset` bản `0.22.4`). Toàn bộ tài liệu chi tiết đã được viết và commit vào repo [`superset`](https://github.com/minhkhacode/superset) (nhánh `main`).
+## Tiến độ công việc
 
-## Tóm tắt trạng thái
-
-| # | Đầu việc | Trạng thái | Tài liệu |
+| # | Đầu việc | Trạng thái | Tài liệu chi tiết |
 |---|---|---|---|
 | 1 | Kiến trúc hệ thống (Application, Metadata DB, Redis cache) | ✅ Xong | [Superset-Architecture.md](Superset-Architecture.md) |
-| 2 | Cài đặt service qua ArgoCD | ✅ Xong (đọc trên hệ thống đang chạy) | [Argocd-Apps/superset-app.yaml](Argocd-Apps/superset-app.yaml), [Kubernetes-Apps/values-superset.yaml](Kubernetes-Apps/values-superset.yaml) |
-| 3 | Sử dụng SQL Lab để viết query | ✅ Xong | Mục 3 dưới đây (chưa có file riêng, gộp vào báo cáo này) |
-| 4 | Kết nối PostgreSQL/ClickHouse + cấu hình Dataset | ✅ Xong | [Superset-Add-Database-Flow.md](Superset-Add-Database-Flow.md) + mục 4 dưới đây |
+| 2 | Cài đặt service qua ArgoCD | ✅ Xong | [Argocd-Apps/superset-app.yaml](Argocd-Apps/superset-app.yaml), [Kubernetes-Apps/values-superset.yaml](Kubernetes-Apps/values-superset.yaml) |
+| 3 | Sử dụng SQL Lab để viết query | ✅ Xong | Mục 3 dưới đây (chưa có file riêng) |
+| 4 | Kết nối PostgreSQL/ClickHouse + cấu hình Dataset | ✅ Xong | [Superset-Add-Database-Flow.md](Superset-Add-Database-Flow.md) |
 | 5 | Cơ chế phân quyền RBAC | ✅ Xong | [Superset-RBAC.md](Superset-RBAC.md) |
 | 6 | Cấu hình cache Redis cho query nặng | ✅ Xong | Mục 6 dưới đây (dựa trên `Superset-Architecture.md` + `values-superset.yaml`) |
 
-Chưa làm (ngoài phạm vi research thuần đọc-hiểu): chưa thực hiện benchmark tải thực tế, chưa test failover Redis/Postgres, chưa cấu hình LDAP/OAuth.
+Hướng phát triển tiếp theo: Thực hiện benchmark tải thực tế, test failover Redis/Postgres, cấu hình LDAP/OAuth.
 
 ---
 
@@ -21,9 +19,10 @@ Chưa làm (ngoài phạm vi research thuần đọc-hiểu): chưa thực hiệ
 
 Xem đầy đủ tại [Superset-Architecture.md](Superset-Architecture.md). Tóm tắt:
 
-- **Superset Application (Flask + React)**: 4 pod trong deployment — `supersetNode` (web/API, gunicorn, port 8088), `supersetWorker` (Celery worker, autoscale 2-6 replica), `supersetCeleryBeat` (scheduler, đang tắt), `supersetWebsockets` (Node.js, chỉ chạy khi `GLOBAL_ASYNC_QUERIES: true` — đang bật).
+- **Superset Application (Flask + React)**: 4 pod trong deployment — `supersetNode` (web/API, gunicorn, port 8088), `supersetWorker` (Celery worker, autoscale 2-6 replica), `supersetCeleryBeat` (scheduler, `enabled: false` - đang tắt), `supersetWebsockets` (Node.js, chỉ chạy khi `GLOBAL_ASYNC_QUERIES: true` — đang bật).
 - **Metadata Database (PostgreSQL 14.17, subchart bitnamilegacy)**: lưu user/role/permission, database connection, dataset/chart/dashboard, query history — **không** lưu dữ liệu phân tích thực.
 - **Caching Layer (Redis 7.0.10, standalone)**: kiêm 3 vai trò — query/result cache, Celery broker + results backend, Redis Stream cho `GLOBAL_ASYNC_QUERIES`.
+- **Data Warehouse (bên ngoài Superset, không do Helm chart này quản lý)**: nơi lưu dữ liệu phân tích thực (PostgreSQL, ClickHouse trong scope ticket này) — Superset chỉ kết nối tới qua SQLAlchemy, cả `supersetNode` và `supersetWorker` đều mở connection trực tiếp tới đây khi chạy query thật.
 
 Luồng cơ bản: User → `supersetNode` → check Redis cache → cache miss thì query đồng bộ (tự chạy) hoặc đẩy Celery (bất đồng bộ) → `supersetWorker` chạy → ghi kết quả vào Redis → `supersetWebsockets` đẩy real-time về browser qua WebSocket.
 
@@ -108,9 +107,9 @@ Redis (subchart `bitnamilegacy/redis` 7.0.10, standalone) đảm nhiệm đồng
 | Cấu hình | Giá trị hiện tại | Ý nghĩa |
 |---|---|---|
 | `cache.keyPrefix` | `superset_` | Prefix key cache kết quả query của chart/dashboard |
-| `cache.defaultTimeout` | `86400`s (24h) | TTL mặc định — có thể override riêng theo từng Dataset (mục 4.2) |
+| `cache.defaultTimeout` | `86400s` (24h) | TTL mặc định — có thể override riêng theo từng Dataset (mục 4.2) |
 | `cache.resultsBackendKeyPrefix` | `superset_results` | Prefix cho kết quả trả về từ Celery task |
-| `cache.asyncQueries.keyPrefix` / `.timeout` | `qc-` / `86400`s | Prefix/TTL riêng cho cơ chế `GLOBAL_ASYNC_QUERIES` |
+| `cache.asyncQueries.keyPrefix` / `.timeout` | `qc-` / `86400s` | Prefix/TTL riêng cho cơ chế `GLOBAL_ASYNC_QUERIES` |
 | `featureFlags.GLOBAL_ASYNC_QUERIES` | `true` | Bật đẩy query nặng qua Celery + trả kết quả qua WebSocket thay vì polling |
 | `supersetWebsockets.config.redis` | trỏ về `<release>-redis-headless:6379` | Websocket service đọc Redis Stream (`redisStreamPrefix: async-events-`) do `supersetWorker` ghi, đẩy real-time về browser |
 

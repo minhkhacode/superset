@@ -4,7 +4,7 @@ Repo triển khai Apache Superset lên Kubernetes qua Helm chart (`Kubernetes-Ap
 
 ## Kiến trúc hệ thống
 
-Superset gồm 3 thành phần cốt lõi, cộng thêm Celery worker/beat và (tuỳ chọn) một websocket service cho async query.
+Superset gồm 3 thành phần cốt lõi do Helm chart này quản lý/deploy, cộng thêm Celery worker/beat, (tuỳ chọn) một websocket service cho async query, và **Data Warehouse** — hệ thống nằm ngoài phạm vi deploy của chart này nhưng là đích đến của mọi query.
 
 ### 1. Superset Application (Flask + React)
 
@@ -32,6 +32,13 @@ Một Redis instance nhưng đảm nhiệm 3 vai trò khác nhau (phân tách b�
 - **Redis Streams cho `GLOBAL_ASYNC_QUERIES`**: khi query nặng chạy qua Celery, `supersetWorker` ghi event kết quả vào một Redis Stream (prefix `async-events-`); `supersetWebsockets` đọc stream này và đẩy trực tiếp về browser qua WebSocket (thay vì browser phải polling), xác thực bằng JWT (`jwtSecret` + cookie `async-token`).
 
 Trong deployment: subchart `redis` (bitnamilegacy/redis 7.0.10, standalone, `auth.enabled: false`, không bật persistence).
+
+### 4. Data Warehouse (bên ngoài Superset)
+
+- Là nơi lưu **dữ liệu phân tích thực** (business data) — hoàn toàn tách biệt với Metadata Database. Superset không sở hữu/quản lý hạ tầng này, chỉ kết nối tới qua SQLAlchemy (xem [Superset-Add-Database-Flow.md](Superset-Add-Database-Flow.md)).
+- Trong scope ticket này: **PostgreSQL** và **ClickHouse**, khai báo qua **Settings → Data → Databases**, driver tương ứng cài bằng `bootstrapScript` (`.[postgres]`, `clickhouse-connect`).
+- Cả `supersetNode` (query đồng bộ) và `supersetWorker` (query bất đồng bộ qua Celery) đều mở connection **trực tiếp** tới đây khi thực thi SQL Lab hoặc load chart/dashboard — không đi qua Redis/Metadata DB ở bước này, Redis/Metadata DB chỉ tham gia trước (đọc connection info, permission) và sau (ghi cache) query thật.
+- Không nằm trong `values-superset.yaml` — không do chart này deploy/quản lý, cần đảm bảo NetworkPolicy/Security Group cho phép egress từ namespace `superset` tới đây.
 
 ## Luồng tương tác cơ bản
 
