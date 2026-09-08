@@ -42,7 +42,20 @@ secretConfig:
 envFromSecret: '{{ template "superset.fullname" . }}-env'
 envFromSecrets: []
 
-extraEnv: {}
+# REDIS_DB: chart tự inject TOÀN BỘ env var chung (bao gồm REDIS_DB=1, dùng cho
+# CACHE_CONFIG của app Python) vào MỌI container qua envFromSecret — kể cả container
+# "-ws" (superset-websocket). Bug: code của superset-websocket (config.ts) đọc thẳng
+# biến môi trường REDIS_DB để OVERRIDE giá trị "redis.db" trong config.json của nó,
+# vốn đang set đúng là 0 (khớp với GLOBAL_ASYNC_QUERIES_RESULTS_BACKEND.db=0 và
+# CELERY_REDIS_URL=.../0 — nơi các stream "async-events-*" thực sự nằm).
+# Kết quả: pod "-ws" âm thầm kết nối nhầm sang Redis DB 1 (DB cache của app, không
+# liên quan gì tới async queries) và không bao giờ đọc được sự kiện "done" nào cả —
+# dashboard treo "Waiting on PostgreSQL" vô thời hạn dù job đã chạy xong.
+# App Python (superset_config.py) không hề đọc biến REDIS_DB (chỉ hardcode "/0" và
+# "/1" trực tiếp trong f-string), nên override này an toàn — không ảnh hưởng
+# webserver/worker/beat, chỉ sửa đúng chỗ bị bug ở "-ws".
+extraEnv:
+  REDIS_DB: "0"
 extraEnvRaw: []
 extraSecretEnv: {}
 extraConfigs: {}
@@ -441,7 +454,7 @@ supersetWebsockets:
     port: 8080
   config:
     port: 8080
-    logLevel: "info"
+    logLevel: "debug"
     logToFile: false
     logFilename: "app.log"
     statsd:
