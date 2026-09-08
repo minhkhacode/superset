@@ -78,13 +78,13 @@ service:
     http: nil
 
 ingress:
-  enabled: false
-  ingressClassName: ~
+  enabled: true
+  ingressClassName: nginx
   annotations: {}
   path: /
   pathType: ImplementationSpecific
   hosts:
-    - chart-example.local
+    - superset.local
   tls: []
   extraHostsRaw: []
 
@@ -152,8 +152,13 @@ cache:
 # bất kể set gì trong values. Set thẳng chuỗi URL ở đây để bypass hẳn nhánh code bị lỗi
 # (nhánh "if .Values.config.GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL" được ưu tiên trước, không
 # qua printf). Release name = "apache-superset" (tên ArgoCD Application), namespace = "superset".
+#
+# Đã đổi sang host ingress "superset.local" (thay vì DNS nội bộ cluster) vì môi trường local
+# (minikube) truy cập Superset qua ingress-nginx (minikube addon "ingress"), không phải từ
+# trong cluster. Cần: (1) minikube tunnel đang chạy, (2) /etc/hosts map "superset.local" tới
+# 127.0.0.1, (3) dùng "ws://" chứ không phải "wss://" vì ingress local chưa có TLS.
 config:
-  GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL: "ws://apache-superset-ws.superset.svc.cluster.local:8080/ws"
+  GLOBAL_ASYNC_QUERIES_WEBSOCKET_URL: "ws://superset.local/ws"
 
 # Feature flags. Xem: https://github.com/apache/superset/blob/master/RESOURCES/FEATURE_FLAGS.md
 # GLOBAL_ASYNC_QUERIES: đẩy query nặng (chart/dashboard) chạy qua Celery worker + đẩy kết quả
