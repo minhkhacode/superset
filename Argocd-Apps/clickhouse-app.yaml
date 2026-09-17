@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: clickhouse
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    # Nguồn 1: Helm Chart ClickHouse (image chính chủ clickhouse/clickhouse-server)
+    - repoURL: 'https://thiagoloureiro.github.io/clickhouse.chart'
+      chart: clickhouse
+      targetRevision: "26.5"
+      helm:
+        valueFiles:
+          - $git-repo/Kubernetes-Apps/values-clickhouse.yaml
+
+    # Nguồn 2: URL Git thực tế trên GitHub của bạn
+    - repoURL: 'https://github.com/minhkhacode/superset.git'
+      targetRevision: main
+      ref: git-repo
+
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: clickhouse
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
